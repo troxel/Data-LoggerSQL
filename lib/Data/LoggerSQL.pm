@@ -15,7 +15,7 @@ require Exporter;
 
 use Data::Dumper;
 use DBI;
-use Carp;
+use Carp qw(cluck);
 
 use vars qw(@ISA);
 @ISA = qw(Exporter DBI);
@@ -35,9 +35,8 @@ sub new
   # verify input
   unless ( ( $arg_hsh{'DSN'} && $arg_hsh{'USR'} ) ) { die("Must specify a DSN and USR") }
 
-  my $Dbh = DBI->connect( $arg_hsh{'DSN'}, $arg_hsh{'USR'} ,$arg_hsh{'PSD'}, { PrintError => "0" , RaiseError => "0" } ) || die ("$DBI::errstr");
-
-  $Dbh->{HandleError} = sub { print "Error! --------- $DBI::state\n"; confess(shift); }; # Handle errors
+  my $Dbh = DBI->connect( $arg_hsh{'DSN'}, $arg_hsh{'USR'} ,$arg_hsh{'PSD'},
+            { PrintError => 1 , RaiseError => 0, mysql_auto_reconnect => 1 } );
 
   my $self = {
         Dbh => $Dbh,
@@ -46,7 +45,34 @@ sub new
         args   => \%arg_hsh
     };
     bless $self, $class;
-    return $self;
+
+   # Found "msyql_auto_reconnect" which seems to work... will use for now
+   # Which btw makes this module mysql only...
+   #$Dbh->{HandleError} = sub { $self->hdl_db_err() };
+   return $self;
+}
+
+# Error handler to try to reconnect
+sub hdl_db_err {
+     my $self = shift @_;
+
+     print "Error! --------- $DBI::state\n";
+     cluck(shift);
+     print "Trying to reconnect...\n";
+
+     while (1)
+     {
+         $self->{Dbh} = DBI->connect( $self->{args}->{'DSN'}, $self->{args}->{'USR'} ,$self->{args}->{'PSD'},
+                        { PrintError => 0 , RaiseError => 0, mysql_auto_reconnect => 1 } );
+
+         if ( $self->{Dbh} )
+         {
+            print "RECONNECTED to $self->{args}->{'DSN'}\n";
+            last;
+         }
+         sleep 10;
+         print "retrying to connect to $self->{args}->{'DSN'}\n";
+     }
 }
 
 # - - - - - - - - - - - - - - - - - - -
@@ -221,9 +247,9 @@ sub get_channels
 
    my $sql = "select * FROM $table order by sort";
    my $loh = $self->{Dbh}->selectall_arrayref($sql,{Columns=>{}});
- 
+
    $self->{'channels'}->{$table} = $loh;
- 
+
    return $loh;
 }
 
@@ -241,14 +267,14 @@ sub set_format
    {
       $loh = $self->get_channels($chan_table);
    }
-  
-   unless ( $loh ) { warning("No channel information found $chan_table"); return ""; }
+
+   unless ( $loh ) { warn("No channel information found $chan_table"); return ""; }
 
    foreach my $chan_ref ( @$loh )
    {
       unless ( $chan_ref->{format}  ) { next; }
       unless ( $data_ref->{$chan_ref->{chan_id}}  ) { next; }
-      
+
       $data_ref->{$chan_ref->{chan_id}} = sprintf("$chan_ref->{format}",$data_ref->{$chan_ref->{chan_id}});
    }
 
